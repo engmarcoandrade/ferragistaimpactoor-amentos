@@ -75,11 +75,13 @@ table.main-table thead th{background:#cc2200;color:#fff;padding:6px 4px;text-ali
 table.main-table tbody tr{border-bottom:1px solid #e0e0e0}
 table.main-table tbody tr:nth-child(even){background:#fafafa}
 table.main-table tbody tr:hover{background:#fff3f0}
-table.main-table tbody td{padding:4px 3px;text-align:center;vertical-align:middle;height:30px}
-table.main-table tbody td.td-desc{text-align:left;position:relative}
+table.main-table tbody td{padding:4px 3px;text-align:center;vertical-align:middle;min-height:30px}
+table.main-table tbody td.td-desc{text-align:left;position:relative;min-width:180px}
 table.main-table td input{width:100%;border:none;background:transparent;font-size:11.5px;padding:1px 2px;text-align:center;color:#222}
 table.main-table td input:focus{outline:1px solid #cc2200;background:#fff8f6;border-radius:2px}
-table.main-table td.td-desc input{text-align:left}
+table.main-table td.td-desc .desc-edit{width:100%;min-height:24px;border:none;background:transparent;font-size:11.5px;padding:1px 2px;text-align:left;color:#222;font-family:'Segoe UI',Arial,sans-serif;line-height:1.4;white-space:pre-wrap;word-break:break-word;outline:none;cursor:text}
+table.main-table td.td-desc .desc-edit:focus{outline:1px solid #cc2200;background:#fff8f6;border-radius:2px}
+table.main-table td.td-desc .desc-edit:empty::before{content:attr(data-placeholder);color:#aaa;pointer-events:none}
 table.main-table td.td-total{font-weight:600}
 .internal-col{background:#fffbea !important}
 thead th.internal-col{background:#b8860b !important}
@@ -151,6 +153,10 @@ table.cat-table tbody td{padding:6px 10px;vertical-align:middle}
   #page{margin:0;box-shadow:none;width:100%}
   .internal-col,.col-actions{display:none !important}
   @page{size:A4 portrait;margin:8mm}
+  table.main-table tbody td{height:auto !important;min-height:unset !important;overflow:visible !important;vertical-align:top !important}
+  table.main-table tbody td.td-desc{white-space:normal !important;word-break:break-word !important;overflow:visible !important}
+  table.main-table tbody td.td-desc .desc-edit{white-space:pre-wrap !important;word-break:break-word !important;overflow:visible !important;height:auto !important;min-height:unset !important;outline:none !important;background:transparent !important}
+  table.main-table tbody tr{page-break-inside:avoid}
 }
 </style>
 
@@ -930,8 +936,18 @@ function importarCatalogo() {
   inp.click();
 }
 
+function getDescVal(el) {
+  if (!el) return '';
+  return el.contentEditable === 'true' ? el.textContent.trim() : (el.value || '');
+}
+function setDescVal(el, val) {
+  if (!el) return;
+  if (el.contentEditable === 'true') el.textContent = val || '';
+  else el.value = val || '';
+}
+
 function buildAC(input) {
-  var q = input.value.toLowerCase().trim();
+  var q = getDescVal(input).toLowerCase();
   closeAC();
   if (q.length < 2) return;
   acResults = catalogoDB.filter(function(it) {
@@ -945,7 +961,7 @@ function buildAC(input) {
   acResults.forEach(function(it, i) {
     html += '<div class="autocomplete-item" data-i="' + i + '" onmousedown="selectAC(' + i + ',event)">';
     html += '<div class="ac-group">' + escHtml(it.g) + '</div>';
-    html += '<span class="ac-desc">' + highlight(it.d, input.value) + '</span>';
+    html += '<span class="ac-desc">' + highlight(it.d, getDescVal(input)) + '</span>';
     html += '<span class="ac-unit">' + escHtml(it.u) + '</span></div>';
   });
   div.innerHTML = html;
@@ -963,7 +979,7 @@ function closeAC() {
 function selectAC(i, e) {
   if (e) e.preventDefault();
   var it = acResults[i]; if (!it || !acActive) return;
-  acActive.value = it.d;
+  setDescVal(acActive, it.d);
   var tr = acActive.closest('tr');
   var unitInp = tr.querySelector('.unit');
   if (unitInp && !unitInp.value) unitInp.value = it.u;
@@ -972,6 +988,7 @@ function selectAC(i, e) {
 }
 
 function acKeydown(e, input) {
+  if (e.key === 'Enter') { e.preventDefault(); }
   var list = document.getElementById('ac-list'); if (!list) return;
   var items = list.querySelectorAll('.autocomplete-item');
   if (e.key === 'ArrowDown') {
@@ -981,7 +998,7 @@ function acKeydown(e, input) {
     e.preventDefault(); acSelected = Math.max(acSelected-1, 0);
     items.forEach(function(el,i){ el.classList.toggle('selected', i===acSelected); });
   } else if (e.key === 'Enter' && acSelected >= 0) {
-    e.preventDefault(); selectAC(acSelected, null);
+    selectAC(acSelected, null);
   } else if (e.key === 'Escape') closeAC();
 }
 
@@ -1023,7 +1040,7 @@ function addRow() {
   var tr = document.createElement('tr');
   tr.innerHTML =
     '<td class="td-num">' + num + '</td>' +
-    '<td class="td-desc"><input type="text" placeholder="Digite para buscar no catalogo..." oninput="buildAC(this);recalcRow(this)" onkeydown="acKeydown(event,this)" onblur="setTimeout(closeAC,150)"></td>' +
+    '<td class="td-desc"><div class="desc-edit" contenteditable="true" data-placeholder="Digite para buscar no catalogo..." oninput="buildAC(this);recalcRow(this)" onkeydown="acKeydown(event,this)" onblur="setTimeout(closeAC,150)"></div></td>' +
     '<td><input type="number" min="0" step="any" placeholder="0" class="qty" oninput="recalcRow(this)"></td>' +
     '<td><input type="text" placeholder="un" class="unit"></td>' +
     '<td><input type="text" placeholder="Marca" class="brand"></td>' +
@@ -1033,7 +1050,8 @@ function addRow() {
     '<td class="td-total"><span class="rowTotal">R$ 0,00</span></td>' +
     '<td><button class="row-btn row-btn-del" onclick="removeRow(this)">&#128465;</button></td>';
   tbody.appendChild(tr);
-  tr.querySelector('input').focus();
+  var firstInput = tr.querySelector('.desc-edit') || tr.querySelector('input');
+  if (firstInput) firstInput.focus();
 }
 
 function removeRow(btn) {
@@ -1109,9 +1127,9 @@ function g(id) { return document.getElementById(id); }
 function coletarEstado() {
   var rows = [];
   document.querySelectorAll('#tableBody tr').forEach(function(tr) {
-    var di = tr.cells[1] ? tr.cells[1].querySelector('input') : null;
+    var di = tr.cells[1] ? (tr.cells[1].querySelector('.desc-edit') || tr.cells[1].querySelector('textarea') || tr.cells[1].querySelector('input')) : null;
     rows.push({
-      desc: di ? di.value : '',
+      desc: di ? getDescVal(di) : '',
       qty: tr.querySelector('.qty') ? tr.querySelector('.qty').value : '',
       unit: tr.querySelector('.unit') ? tr.querySelector('.unit').value : '',
       brand: tr.querySelector('.brand') ? tr.querySelector('.brand').value : '',
@@ -1151,7 +1169,8 @@ function restaurarEstado(s) {
     rows.forEach(function(r) {
       addRow();
       var tr = document.getElementById('tableBody').lastElementChild;
-      tr.cells[1].querySelector('input').value = r.desc || '';
+      var descEl = tr.cells[1].querySelector('.desc-edit') || tr.cells[1].querySelector('textarea') || tr.cells[1].querySelector('input');
+      if (descEl) setDescVal(descEl, r.desc || '');
       tr.querySelector('.qty').value = r.qty || ''; tr.querySelector('.unit').value = r.unit || '';
       tr.querySelector('.brand').value = r.brand || ''; tr.querySelector('.cost').value = r.cost || '';
       tr.querySelector('.rowMargin').value = r.rowMargin || globalMargin;
