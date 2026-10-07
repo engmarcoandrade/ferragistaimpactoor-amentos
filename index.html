@@ -195,8 +195,8 @@ table.cat-table tbody td{padding:6px 10px;vertical-align:middle}
   </div>
   <span id="autosave-countdown"></span>
   <div class="autosave-config">
-    <button class="btn-storage" id="btn-vincular" onclick="vincularArquivo()" title="Vincular um arquivo fixo na pasta do seu computador">&#128196; Vincular Arquivo</button>
-    <span id="arquivo-vinculado" style="color:#555;font-size:10px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    <button class="btn-storage" id="btn-config-drive" onclick="configurarDrive()" title="Configurar URL do Google Apps Script">&#9729; Google Drive</button>
+    <span id="drive-status" style="color:#555;font-size:10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
     <label style="margin-left:8px;">Salvar a cada:</label>
     <select id="autosave-interval" onchange="setAutosaveInterval()">
       <option value="60">1 minuto</option>
@@ -770,17 +770,12 @@ var currentIdx = -1;
 var acActive = null, acSelected = -1, acResults = [];
 
 function loadCatalogoDB() {
-  var raw = localStorage.getItem('impacto_catalogo_v1');
-  if (raw) { try { catalogoDB = JSON.parse(raw); return; } catch(e) {} }
   catalogoDB = CATALOGO_INICIAL.map(function(it, i) {
     return {id: i+1, g: it.g, d: it.d, u: it.u};
   });
-  saveCatalogoDB();
 }
 
-function saveCatalogoDB() {
-  localStorage.setItem('impacto_catalogo_v1', JSON.stringify(catalogoDB));
-}
+function saveCatalogoDB() { /* catálogo em memória, baseado no CATALOGO_INICIAL */ }
 
 function getGrupos() {
   var seen = {}, result = [];
@@ -1008,14 +1003,8 @@ document.addEventListener('click', function(e) {
 
 document.addEventListener('DOMContentLoaded', function() {
   loadCatalogoDB();
-  var saved = localStorage.getItem('impacto_orcamentos_v2');
-  if (saved) {
-    try { var p = JSON.parse(saved); orcamentos = p.orcamentos || []; currentIdx = p.currentIdx || 0; } catch(e) {}
-  }
-  if (!orcamentos.length) { criarOrcamentoBlanco(); }
-  else { carregarOrcamento(currentIdx); }
-  atualizarNavegador();
   iniciarAutosave();
+  carregarDoDrive();
 });
 
 function proximoNumero() {
@@ -1029,7 +1018,6 @@ function criarOrcamentoBlanco() {
   currentIdx = orcamentos.length - 1;
   restaurarEstado(orcamentos[currentIdx]);
   atualizarNavegador();
-  salvarLocalStorage();
 }
 
 function novoOrcamento() { orcamentos[currentIdx] = coletarEstado(); criarOrcamentoBlanco(); }
@@ -1199,84 +1187,37 @@ function carregarOrcamento(idx) {
 }
 
 function navegarOrcamento(dir) {
-  orcamentos[currentIdx] = coletarEstado(); salvarLocalStorage(); carregarOrcamento(currentIdx+dir);
+  orcamentos[currentIdx] = coletarEstado(); carregarOrcamento(currentIdx+dir);
 }
 
 function salvarAtual() {
-  orcamentos[currentIdx] = coletarEstado(); salvarLocalStorage();
-  var blob = new Blob([JSON.stringify({orcamentos:orcamentos, currentIdx:currentIdx}, null, 2)], {type:'application/json'});
-  var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-  a.download = 'orcamentos_impacto_' + (g('clientName').value||'impacto').replace(/\s/g,'_') + '.json';
-  a.click(); alert('Salvo! Arquivo JSON baixado.');
+  orcamentos[currentIdx] = coletarEstado();
+  salvarNoDrive(orcamentos[currentIdx]);
 }
 
-function salvarLocalStorage() {
-  try { localStorage.setItem('impacto_orcamentos_v2', JSON.stringify({orcamentos:orcamentos, currentIdx:currentIdx})); } catch(e) {}
-}
+// ===== SISTEMA DE ARMAZENAMENTO - GOOGLE DRIVE (Apps Script) =====
+// Cole aqui a URL gerada ao implantar o Apps Script:
+var SCRIPT_URL = localStorage.getItem('impacto_script_url') || '';
 
-// ===== SISTEMA DE ARMAZENAMENTO =====
 var autosaveSeconds = 300;
 var autosaveEnabled = true;
 var autosaveCountdownTimer = null;
 var autosaveRemaining = 0;
-var fileHandle = null;
 
-async function vincularArquivo() {
-  try {
-    var opts = { types: [{ description: 'Dados Impacto', accept: { 'application/json': ['.json'] } }], suggestedName: 'dados_impacto.json' };
-    if (window.showSaveFilePicker) {
-      fileHandle = await window.showSaveFilePicker(opts);
-    } else if (window.showOpenFilePicker) {
-      var handles = await window.showOpenFilePicker({ types: opts.types, multiple: false });
-      fileHandle = handles[0];
-    } else {
-      alert('Use Chrome ou Edge para vincular um arquivo fixo.\nO auto-save por download continua funcionando.');
-      return;
-    }
-    var nome = fileHandle.name;
-    document.getElementById('arquivo-vinculado').textContent = nome;
-    var btn = document.getElementById('btn-vincular');
-    btn.textContent = '\u2714 ' + nome;
-    btn.classList.add('vinculado');
-    await gravarArquivoVinculado();
-    setStatus('saved', 'Arquivo vinculado!', 'Gravando automaticamente');
-    try {
-      var file = await fileHandle.getFile();
-      var text = await file.text();
-      var data = JSON.parse(text);
-      if (data && data.orcamentos && data.orcamentos.length > 0) {
-        if (confirm('Arquivo ja tem ' + data.orcamentos.length + ' orcamento(s). Carregar agora?')) {
-          orcamentos = data.orcamentos;
-          if (data.catalogo && data.catalogo.length > 0) { catalogoDB = data.catalogo; saveCatalogoDB(); }
-          currentIdx = data.currentIdx || 0;
-          carregarOrcamento(currentIdx);
-          atualizarNavegador();
-        }
-      }
-    } catch(e) {}
-  } catch(e) {
-    if (e.name !== 'AbortError') console.error('Erro ao vincular:', e);
-  }
-}
-
-async function gravarArquivoVinculado() {
-  if (!fileHandle) return false;
-  try {
-    var writable = await fileHandle.createWritable();
-    await writable.write(JSON.stringify({ orcamentos: orcamentos, currentIdx: currentIdx, catalogo: catalogoDB, savedAt: new Date().toISOString() }, null, 2));
-    await writable.close();
-    return true;
-  } catch(e) { return false; }
-}
-
-function baixarBackup() {
-  var blob = new Blob([JSON.stringify({ orcamentos: orcamentos, currentIdx: currentIdx, catalogo: catalogoDB, savedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  var now = new Date();
-  a.download = 'impacto_' + now.toLocaleDateString('pt-BR').replace(/\//g,'-') + '_' + now.toTimeString().slice(0,5).replace(':','-') + '.json';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(a.href);
+function configurarDrive() {
+  var url = prompt('Cole aqui a URL do seu Google Apps Script:\n(Menu Implantar > Gerenciar implanta\u00e7\u00f5es > copiar URL)', SCRIPT_URL);
+  if (url === null) return;
+  url = url.trim();
+  if (!url) { alert('URL n\u00e3o informada.'); return; }
+  SCRIPT_URL = url;
+  localStorage.setItem('impacto_script_url', url);
+  var btn = document.getElementById('btn-config-drive');
+  var status = document.getElementById('drive-status');
+  btn.classList.add('vinculado');
+  btn.textContent = '\u2714 Drive conectado';
+  if (status) status.textContent = 'Sincronizando...';
+  setStatus('saving', 'Conectando ao Drive...', '');
+  carregarDoDrive();
 }
 
 function setStatus(type, text, last) {
@@ -1286,6 +1227,88 @@ function setStatus(type, text, last) {
   if (dot && type !== null) dot.className = type;
   if (txt && text) txt.textContent = text;
   if (lastEl && last !== undefined) lastEl.textContent = last;
+}
+
+// \u2500\u2500 Carregar todos os or\u00e7amentos do Drive ao iniciar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function carregarDoDrive() {
+  if (!SCRIPT_URL) {
+    // Sem Drive configurado \u2014 come\u00e7a com or\u00e7amento em branco
+    if (!orcamentos.length) criarOrcamentoBlanco();
+    else { carregarOrcamento(currentIdx); atualizarNavegador(); }
+    setStatus('', 'Drive n\u00e3o configurado', '');
+    var status = document.getElementById('drive-status');
+    if (status) status.textContent = 'Clique em "Google Drive" para conectar';
+    return;
+  }
+  setStatus('saving', 'Carregando do Drive...', '');
+  fetch(SCRIPT_URL + '?acao=listar')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok || !data.lista || !data.lista.length) {
+        if (!orcamentos.length) criarOrcamentoBlanco();
+        else { carregarOrcamento(currentIdx); atualizarNavegador(); }
+        setStatus('saved', 'Drive conectado', 'Nenhum or\u00e7amento ainda');
+        atualizarBotaoDrive();
+        return;
+      }
+      // Carrega resumo de todos os or\u00e7amentos
+      var lista = data.lista;
+      // Busca o JSON completo de cada or\u00e7amento em paralelo
+      var promessas = lista.map(function(item) {
+        return fetch(SCRIPT_URL + '?acao=buscar&numero=' + encodeURIComponent(item.numero))
+          .then(function(r) { return r.json(); })
+          .then(function(d) { return d.ok ? d.orcamento : null; });
+      });
+      Promise.all(promessas).then(function(results) {
+        orcamentos = results.filter(function(o) { return o !== null; });
+        currentIdx = orcamentos.length - 1;
+        if (!orcamentos.length) criarOrcamentoBlanco();
+        else { carregarOrcamento(currentIdx); atualizarNavegador(); }
+        var hora = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+        setStatus('saved', 'Drive conectado', '\u2713 ' + hora + ' (' + orcamentos.length + ' or\u00e7.)');
+        atualizarBotaoDrive();
+        startAutosaveCycle();
+      });
+    })
+    .catch(function(err) {
+      console.error('Erro ao carregar do Drive:', err);
+      setStatus('error', 'Erro ao conectar Drive', 'Verifique a URL');
+      if (!orcamentos.length) criarOrcamentoBlanco();
+      else { carregarOrcamento(currentIdx); atualizarNavegador(); }
+    });
+}
+
+// \u2500\u2500 Salvar um or\u00e7amento no Drive \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function salvarNoDrive(orc) {
+  if (!SCRIPT_URL) return;
+  setStatus('saving', 'Salvando no Drive...', '');
+  fetch(SCRIPT_URL, {
+    method: 'POST',
+    body: JSON.stringify({ acao: 'salvar', orcamento: orc })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    var hora = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+    if (data.ok) {
+      setStatus('saved', 'Salvo no Drive', '\u2713 ' + hora);
+    } else {
+      setStatus('error', 'Erro ao salvar', data.erro || '');
+    }
+    setTimeout(function() { setStatus('', null, null); }, 3000);
+  })
+  .catch(function(err) {
+    setStatus('error', 'Erro ao salvar', '');
+    console.error(err);
+    setTimeout(function() { setStatus('', null, null); }, 3000);
+  });
+}
+
+function atualizarBotaoDrive() {
+  if (!SCRIPT_URL) return;
+  var btn = document.getElementById('btn-config-drive');
+  if (btn) { btn.classList.add('vinculado'); btn.textContent = '\u2714 Drive conectado'; }
+  var status = document.getElementById('drive-status');
+  if (status) status.textContent = orcamentos.length + ' or\u00e7amento(s) na nuvem';
 }
 
 function setAutosaveInterval() {
@@ -1298,7 +1321,7 @@ function setAutosaveInterval() {
 }
 
 function startAutosaveCycle() {
-  if (!autosaveEnabled) return;
+  if (!autosaveEnabled || !SCRIPT_URL) return;
   autosaveRemaining = autosaveSeconds;
   clearInterval(autosaveCountdownTimer);
   autosaveCountdownTimer = setInterval(function() {
@@ -1309,43 +1332,38 @@ function startAutosaveCycle() {
   }, 1000);
 }
 
-async function executarAutosave() {
-  if (!autosaveEnabled) return;
-  setStatus('saving', 'Salvando...', '');
-  try {
-    orcamentos[currentIdx] = coletarEstado();
-    salvarLocalStorage();
-    var ok = fileHandle ? await gravarArquivoVinculado() : false;
-    if (!ok) baixarBackup();
-    var hora = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
-    setStatus('saved', 'Auto-save ativo', '\u2713 ' + hora + (fileHandle ? ' (arquivo)' : ' (download)'));
-    setTimeout(function() { setStatus('', null, null); startAutosaveCycle(); }, 2000);
-  } catch(e) {
-    setStatus('error', 'Erro no save', '');
-    setTimeout(function() { setStatus('', 'Auto-save ativo', ''); startAutosaveCycle(); }, 3000);
-  }
+function executarAutosave() {
+  if (!autosaveEnabled || !SCRIPT_URL) return;
+  orcamentos[currentIdx] = coletarEstado();
+  salvarNoDrive(orcamentos[currentIdx]);
+  setTimeout(function() { startAutosaveCycle(); }, 2000);
 }
 
 function iniciarAutosave() {
-  if (!window.showSaveFilePicker && !window.showOpenFilePicker) {
-    var btn = document.getElementById('btn-vincular');
-    if (btn) { btn.title = 'Use Chrome ou Edge para esta funcao'; btn.style.opacity = '0.5'; }
+  // Recupera URL do Drive salva anteriormente
+  var urlSalva = localStorage.getItem('impacto_script_url');
+  if (urlSalva) {
+    SCRIPT_URL = urlSalva;
+    atualizarBotaoDrive();
   }
-  setStatus('', 'Auto-save ativo', '');
-  startAutosaveCycle();
+  setStatus('', 'Iniciando...', '');
+  // Debounce: salva no Drive 3s ap\u00f3s \u00faltima digita\u00e7\u00e3o
   document.addEventListener('input', function() {
-    clearTimeout(window._lsDebounce);
-    window._lsDebounce = setTimeout(function() {
-      if (orcamentos.length > 0 && currentIdx >= 0) {
+    clearTimeout(window._driveDebounce);
+    window._driveDebounce = setTimeout(function() {
+      if (orcamentos.length > 0 && currentIdx >= 0 && SCRIPT_URL) {
         orcamentos[currentIdx] = coletarEstado();
-        salvarLocalStorage();
-        setStatus('saved', null, null);
-        setTimeout(function() { setStatus('', null, null); }, 600);
+        salvarNoDrive(orcamentos[currentIdx]);
       }
-    }, 1500);
+    }, 3000);
   });
   window.addEventListener('beforeunload', function() {
-    if (orcamentos.length > 0 && currentIdx >= 0) { orcamentos[currentIdx] = coletarEstado(); salvarLocalStorage(); }
+    if (orcamentos.length > 0 && currentIdx >= 0 && SCRIPT_URL) {
+      orcamentos[currentIdx] = coletarEstado();
+      // Tentativa s\u00edncrona (melhor esfor\u00e7o)
+      navigator.sendBeacon && navigator.sendBeacon(SCRIPT_URL,
+        JSON.stringify({ acao: 'salvar', orcamento: orcamentos[currentIdx] }));
+    }
   });
 }
 
